@@ -315,6 +315,7 @@ class BaselineGenerator(nn.Module):
             model += [nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2, padding=1, output_padding=1, bias=use_bias),
                       norm_layer(output_channel),
                       nn.ReLU(True)]
+            input_channel = output_channel
 
         model += [nn.ReflectionPad2d(3),
                   nn.Conv2d(ngf, output_nc, 7),
@@ -341,16 +342,55 @@ class AttentionGenerator(nn.Module):
             use_dropout (bool)  -- if use dropout layers
             padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
         """
-
         super(AttentionGenerator, self).__init__()
-        ## Your Implementation Here ##
 
+        self.att_out_ch = 0
+
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = [nn.ReflectionPad2d(3),
+                 nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True)),
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
+
+        input_channel = ngf
+        for _ in range(2):
+            output_channel = input_channel * 2
+            model += [nn.utils.spectral_norm(nn.Conv2d(input_channel, output_channel, kernel_size=3,
+                                                       stride=2, padding=1)),
+                      norm_layer(output_channel),
+                      nn.ReLU(True)]
+
+            input_channel = output_channel
+            self.att_out_ch = output_channel
+
+        model += [Self_Attn(input_channel, self.att_out_ch)]
+
+        for _ in range(6):
+            model += [
+                ResnetBlock(input_channel, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
+                            use_bias=use_bias)]
+
+        for _ in range(2):
+            output_channel = input_channel // 2
+            model += [
+                nn.utils.spectral_norm(nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2,
+                                                          padding=1, output_padding=1, bias=use_bias)),
+                norm_layer(output_channel),
+                nn.ReLU(True)]
+
+        model += [nn.ReflectionPad2d(3),
+                  nn.Conv2d(ngf, output_nc, 7),
+                  nn.Tanh()]
+
+        self.model = nn.Sequential(*model)
 
     def forward(self, input):
         """Standard forward"""
-        ## Your Implementation Here ##
-
-        return None
+        return self.model(input)
 
 
 class Self_Attn(nn.Module):
@@ -362,12 +402,33 @@ class Self_Attn(nn.Module):
         activation    -- activation function type
         """
         super(Self_Attn, self).__init__()
-        ## Your Implementation Here ##
+        self.input_channel = in_dim
+        self.activation = activation
+        self.k = 8
+        self.query = nn.Conv2d(self.input_channel, self.input_channel // self.k, kernel_size=1)
+        self.key = nn.Conv2d(self.input_channel, self.input_channel // self.k, kernel_size=1)
+        self.value = nn.Conv2d(self.input_channel, self.input_channel, kernel_size=1)
+        self.conv_1x1 = nn.Conv2d(self.input_channel, self.input_channel, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
-        ## Your Implementation Here ##
+        batch_size, channel, width, height = x.size()
 
-        return None
+        k = self.key(x)
+        k = k.view(batch_size, -1, width * height)
+        q = self.query(x)
+        q = q.view(batch_size, -1, width*height)
+        s = torch.bmm(k.transpose(1,2), q)
+        attention_map = self.softmax(s)
+        v = self.v(x)
+        v = v.view(batch_size, -1, width * height)
+        out = torch.bmm(v, attention_map.transpose(1, 2))
+        out = out.view(batch_size, -1, width, height)
+        attention_fmap = self.value(out)
+        o = x + self.gamma * attention_fmap
+
+        return o
 
 
 class BaselineDiscriminator(nn.Module):

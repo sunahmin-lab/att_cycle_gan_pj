@@ -144,20 +144,21 @@ class CycleGANModel(BaseModel):
         lambda_B = self.opt.lambda_B
 
         if lambda_identity > 0:
-            self.same_A = self.netG_B(self.real_A)
-            self.same_B = self.netG_A(self.real_B)
-            self.identity_loss_A = self.criterionIdt(self.same_A, self.real_A) * lambda_A * lambda_identity
-            self.identity_loss_B = self.criterionIdt(self.same_B, self.real_B) * lambda_B * lambda_identity
-        else:
-            self.identity_loss_A = 0
-            self.identity_loss_B = 0
+            self.idt_A = self.netG_A(self.real_B)
+            self.idt_B = self.netG_B(self.real_A)
+            self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_identity
+            self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_identity
 
-        self.G_A_loss = self.criterionGAN(self.netD_A(self.fake_B), True)
-        self.G_B_loss = self.criterionGAN(self.netD_B(self.fake_A), True)
-        self.A_cycle_loss = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
-        self.B_cycle_loss = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
-        self.loss_G = self.identity_loss_A + self.identity_loss_B + self.G_A_loss + self.G_B_loss + \
-                      self.A_cycle_loss + self.B_cycle_loss
+        else:
+            self.loss_idt_A = 0
+            self.loss_idt_B = 0
+
+        self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
+        self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
+        self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
+        self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
+        self.loss_G = self.loss_idt_A + self.loss_idt_B + self.loss_G_A + self.loss_G_B + \
+                      self.loss_cycle_A + self.loss_cycle_B
         self.loss_G.backward()
 
     def optimize_parameters(self):
