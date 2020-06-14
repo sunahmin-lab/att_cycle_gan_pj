@@ -22,7 +22,23 @@ from data import create_dataset
 from models import create_model
 from util.visualizer import save_images
 from util import html
+from util import util
+import torch
+import numpy as np
+from PIL import Image
+from metric.metric import calculate_fid_given_paths
 
+def save_image_(image_numpy, image_path):
+    """Save a numpy image to the disk
+
+    Parameters:
+        image_numpy (numpy array) -- input numpy array
+        image_path (str)          -- the path of the image
+    """
+    image_pil = Image.fromarray(image_numpy)
+    h, w, _ = image_numpy.shape
+
+    image_pil.save(image_path)
 
 if __name__ == '__main__':
     opt = TestOptions().parse()  # get test options
@@ -53,6 +69,18 @@ if __name__ == '__main__':
         model.test()           # run inference
         visuals = model.get_current_visuals()  # get image results
         img_path = model.get_image_paths()     # get image paths
+        for label, img, in visuals.items():
+            im = util.tensor2im(img)
+            name = img_path[0].split('/')[-1]
+            name = name.split('.')[0]
+            img_name = image_name = '%s_%s.png' % (name, label)
+            save_path = os.path.join(opt.results_dir, label)
+            if os.path.isdir(save_path):
+                save_image_(im, os.path.join(save_path, img_name))
+            else:
+                os.makedirs(save_path, exist_ok=True)
+                save_image_(im, os.path.join(save_path, img_name))
+
 
         if i % 5 == 0:  # save images to an HTML file
             print('processing (%04d)-th image... %s' % (i, img_path))
@@ -60,10 +88,16 @@ if __name__ == '__main__':
 
     # evaluate by fid score (target -> source)
     ## Your Implementation Here ##
-    fid_scoreA = 0
+    target_path_A = os.path.join(opt.results_dir, 'real_A')
+    pred_path_A = os.path.join(opt.results_dir, 'fake_A')
+    fid_scoreA = calculate_fid_given_paths([target_path_A, pred_path_A], 50, True, 2048)
+
+
+    target_path_B = os.path.join(opt.results_dir, 'real_B')
+    pred_path_B = os.path.join(opt.results_dir, 'fake_B')
     # evaluate by fid score (source -> target)
     ## Your Implementation Here ##
-    fid_scoreB = 0
+    fid_scoreB = calculate_fid_given_paths([target_path_B, pred_path_B], 50, True, 2048)
 
     print('source-like target / source fid score = %d \n' % (fid_scoreA))
     print('target-like source / target fid score = %d \n' % (fid_scoreB))

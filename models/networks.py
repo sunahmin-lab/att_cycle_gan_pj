@@ -352,35 +352,35 @@ class AttentionGenerator(nn.Module):
             use_bias = norm_layer == nn.InstanceNorm2d
 
         model = [nn.ReflectionPad2d(3),
-                 nn.utils.spectral_norm(nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True)),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True),
                  norm_layer(ngf),
                  nn.ReLU(True)]
 
         input_channel = ngf
-        for _ in range(2):
+        for _ in range(3):
             output_channel = input_channel * 2
-            model += [nn.utils.spectral_norm(nn.Conv2d(input_channel, output_channel, kernel_size=3,
-                                                       stride=2, padding=1)),
+            model += [nn.Conv2d(input_channel, output_channel, kernel_size=3,
+                                                       stride=2, padding=1),
                       norm_layer(output_channel),
                       nn.ReLU(True)]
 
             input_channel = output_channel
-            self.att_out_ch = output_channel
 
-        model += [Self_Attn(input_channel, self.att_out_ch)]
+        model += [Self_Attn(input_channel, 'relu')]
 
         for _ in range(6):
             model += [
                 ResnetBlock(input_channel, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
                             use_bias=use_bias)]
 
-        for _ in range(2):
+        for _ in range(3):
             output_channel = input_channel // 2
             model += [
-                nn.utils.spectral_norm(nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2,
-                                                          padding=1, output_padding=1, bias=use_bias)),
+                nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2,
+                                                          padding=1, output_padding=1, bias=use_bias),
                 norm_layer(output_channel),
                 nn.ReLU(True)]
+            input_channel = output_channel
 
         model += [nn.ReflectionPad2d(3),
                   nn.Conv2d(ngf, output_nc, 7),
@@ -390,6 +390,7 @@ class AttentionGenerator(nn.Module):
 
     def forward(self, input):
         """Standard forward"""
+
         return self.model(input)
 
 
@@ -421,11 +422,11 @@ class Self_Attn(nn.Module):
         q = q.view(batch_size, -1, width*height)
         s = torch.bmm(k.transpose(1,2), q)
         attention_map = self.softmax(s)
-        v = self.v(x)
+        v = self.value(x)
         v = v.view(batch_size, -1, width * height)
         out = torch.bmm(v, attention_map.transpose(1, 2))
         out = out.view(batch_size, -1, width, height)
-        attention_fmap = self.value(out)
+        attention_fmap = self.conv_1x1(out)
         o = x + self.gamma * attention_fmap
 
         return o
@@ -477,7 +478,7 @@ class BaselineDiscriminator(nn.Module):
 
 class AttentionDiscriminator(nn.Module):
 
-    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d):
+    def __init__(self, input_nc, ndf=64, n_layers=2, norm_layer=nn.BatchNorm2d):
         """Construct discriminator
 
         Parameters:
@@ -487,10 +488,36 @@ class AttentionDiscriminator(nn.Module):
             norm_layer      -- normalization layer
         """
         super(AttentionDiscriminator, self).__init__()
-        ## Your Implementation Here ##
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = []
+        model += [nn.Conv2d(input_nc, ndf, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                  norm_layer(ndf),
+                  nn.LeakyReLU(0.2, True)]
+
+        input_channel = ndf
+        for _ in range(n_layers):
+            output_channel = min(input_channel * 2, 512)
+            model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                      norm_layer(output_channel),
+                      nn.LeakyReLU(0.2, True)]
+            input_channel = output_channel
+
+        output_channel = min(input_channel * 2, 512)
+
+        model += [Self_Attn(input_channel, 'relu')]
+
+        model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, padding=1, bias=use_bias),
+                  norm_layer(output_channel),
+                  nn.LeakyReLU(0.2, True),
+                  nn.Conv2d(output_channel, 1, kernel_size=4, padding=1)]
+
+        self.model = nn.Sequential(*model)
 
     def forward(self, input):
-        """Standard forward"""
-        ## Your Implementation Here ##
+        """Standard forward."""
 
-        return None
+        return self.model(input)
