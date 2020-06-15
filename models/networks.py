@@ -190,8 +190,11 @@ def define_G(input_nc, output_nc, ngf, netG, norm='instance', use_dropout=False,
         net = AttentionGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout)  # you can modify the input variables and types
     elif netG == 'basic':
         net = BaselineGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout)  # you can modify the input variables and types
-    elif netG == 'advanced':
-        net = None  # you can modify the input variables and types (PA Step4)
+    elif netG == 'makeup':
+        net = MakeUpGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout)  # you can modify the input variables and types (PA Step4)
+    elif netG == 'basic_':
+        net = BaselineGenerator_(input_nc, output_nc, ngf, norm_layer=norm_layer,
+                              use_dropout=use_dropout)  # you can modify the input variables and types (PA Step4)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -214,11 +217,13 @@ def define_D(input_nc, ndf, netD, norm='instance', init_type='normal', init_gain
     norm_layer = get_norm_layer(norm_type=norm)
 
     if netD == 'attention_basic':  # self attention based discriminator
-        net = AttentionDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer)
+        net = AttentionDiscriminator(input_nc, ndf, n_layers=2, norm_layer=norm_layer)
     elif netD == 'basic':  # baseline discriminator
-        net = BaselineDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer)
-    elif netD == 'advanced':
-        net = None  # you can modify the input variables and types (PA Step4)
+        net = BaselineDiscriminator(input_nc, ndf, n_layers=2, norm_layer=norm_layer)
+    elif netD == 'makeup':
+        net = MakeUpDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer)  # you can modify the input variables and types (PA Step4)
+    elif netD == 'basic_':
+        net = BaselineDiscriminator_(input_nc, ndf, n_layers=3, norm_layer=norm_layer)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -274,6 +279,82 @@ class GANLoss(nn.Module):
 
         return loss
 
+class MakeUpGenerator(nn.Module):
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, padding_type='reflect'):
+        """Construct a generator
+
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- if use dropout layers
+            padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
+        """
+        super(MakeUpGenerator, self).__init__()
+
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        input_1 = [nn.ReflectionPad2d(3),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True),
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
+
+        input_2 = [nn.ReflectionPad2d(3),
+                   nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True),
+                   norm_layer(ngf),
+                   nn.ReLU(True)]
+
+        model = []
+
+        input_channel = ngf
+        for _ in range(2):
+            output_channel = input_channel * 2
+            model += [nn.Conv2d(input_channel, output_channel,kernel_size=3, stride=2, padding=1),
+                      norm_layer(output_channel),
+                      nn.ReLU(True)]
+            input_channel = output_channel
+
+        for _ in range(6):
+            model += [ResnetBlock(input_channel, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        for _ in range(2):
+            output_channel = input_channel // 2
+            model += [nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2, padding=1, output_padding=1, bias=use_bias),
+                      norm_layer(output_channel),
+                      nn.ReLU(True)]
+            input_channel = output_channel
+
+
+        output_1 = []
+        output_2 = []
+        output_1 += [nn.ReflectionPad2d(3),
+                  nn.Conv2d(ngf, output_nc, 7),
+                  nn.Tanh()]
+        output_2 += [nn.ReflectionPad2d(3),
+                   nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True),
+                   norm_layer(ngf),
+                   nn.ReLU(True)]
+
+        self.input_1 = nn.Sequential(*input_1)
+        self.input_2 = nn.Sequential(*input_2)
+        self.model = nn.Sequential(*model)
+        self.output_1 = nn.Sequential(*output_1)
+        self.output_2 = nn.Sequential(*output_2)
+
+    def forward(self, input):
+        """Standard forward"""
+        output = self.input_1(input)
+        output2 = self.input_2(input)
+        output = torch.cat((output, output2), dim=1)
+        output = self.model(output)
+
+        return output
+
+
 class BaselineGenerator(nn.Module):
 
     def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, padding_type='reflect'):
@@ -328,6 +409,60 @@ class BaselineGenerator(nn.Module):
         return self.model(input)
 
 
+class BaselineGenerator_(nn.Module):
+
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, padding_type='reflect'):
+        """Construct a generator
+
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- if use dropout layers
+            padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
+        """
+        super(BaselineGenerator_, self).__init__()
+
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = [nn.ReflectionPad2d(3),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, bias=True),
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
+
+        input_channel = ngf
+        for _ in range(2):
+            output_channel = input_channel * 2
+            model += [nn.Conv2d(input_channel, output_channel,kernel_size=3, stride=2, padding=1),
+                      norm_layer(output_channel),
+                      nn.ReLU(True)]
+            input_channel = output_channel
+
+        for _ in range(9):
+            model += [ResnetBlock(input_channel, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        for _ in range(2):
+            output_channel = input_channel // 2
+            model += [nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2, padding=1, output_padding=1, bias=use_bias),
+                      norm_layer(output_channel),
+                      nn.ReLU(True)]
+            input_channel = output_channel
+
+        model += [nn.ReflectionPad2d(3),
+                  nn.Conv2d(ngf, output_nc, 7),
+                  nn.Tanh()]
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, input):
+        """Standard forward"""
+        return self.model(input)
+
+
 class AttentionGenerator(nn.Module):
 
     def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, padding_type='reflect'):
@@ -357,7 +492,7 @@ class AttentionGenerator(nn.Module):
                  nn.ReLU(True)]
 
         input_channel = ngf
-        for _ in range(3):
+        for _ in range(2):
             output_channel = input_channel * 2
             model += [nn.Conv2d(input_channel, output_channel, kernel_size=3,
                                                        stride=2, padding=1),
@@ -368,12 +503,12 @@ class AttentionGenerator(nn.Module):
 
         model += [Self_Attn(input_channel, 'relu')]
 
-        for _ in range(6):
+        for _ in range(9):
             model += [
                 ResnetBlock(input_channel, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout,
                             use_bias=use_bias)]
 
-        for _ in range(3):
+        for _ in range(2):
             output_channel = input_channel // 2
             model += [
                 nn.ConvTranspose2d(input_channel, output_channel, kernel_size=3, stride=2,
@@ -406,8 +541,8 @@ class Self_Attn(nn.Module):
         self.input_channel = in_dim
         self.activation = activation
         self.k = 8
-        self.query = nn.Conv2d(self.input_channel, self.input_channel // self.k, kernel_size=1)
         self.key = nn.Conv2d(self.input_channel, self.input_channel // self.k, kernel_size=1)
+        self.query = nn.Conv2d(self.input_channel, self.input_channel // self.k, kernel_size=1)
         self.value = nn.Conv2d(self.input_channel, self.input_channel, kernel_size=1)
         self.conv_1x1 = nn.Conv2d(self.input_channel, self.input_channel, kernel_size=1)
         self.gamma = nn.Parameter(torch.zeros(1))
@@ -415,22 +550,107 @@ class Self_Attn(nn.Module):
 
     def forward(self, x):
         batch_size, channel, width, height = x.size()
-
         k = self.key(x)
-        k = k.view(batch_size, -1, width * height)
+        k = k.view(batch_size, channel//8, -1)
         q = self.query(x)
-        q = q.view(batch_size, -1, width*height)
-        s = torch.bmm(k.transpose(1,2), q)
-        attention_map = self.softmax(s)
-        v = self.value(x)
-        v = v.view(batch_size, -1, width * height)
-        out = torch.bmm(v, attention_map.transpose(1, 2))
-        out = out.view(batch_size, -1, width, height)
+        q = q.view(batch_size, channel//8, -1) #(N, input_ch/k, h*W)
+        s = torch.bmm(k.transpose(1,2), q) #(N, h*W, h*W)
+        attention_map = self.softmax(s) #(2,128.128)
+        v = self.value(x) #(N, input_ch, h, W)
+        v = v.view(batch_size, channel, -1) #(N, input_ch, h*W)
+        out = torch.bmm(v, attention_map.transpose(1,2)) #(N, h*W, input_ch)
+        out = out.view(batch_size, channel, width, height)
         attention_fmap = self.conv_1x1(out)
         o = x + self.gamma * attention_fmap
 
         return o
 
+class MakeUpDiscriminator(nn.Module):
+
+    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d):
+        """Construct discriminator
+
+        Parameters:
+            input_nc (int)  -- the number of channels in input images
+            ndf (int)       -- the number of filters in the last conv layer
+            n_layers (int)  -- the number of conv layers in the discriminator
+            norm_layer      -- normalization layer
+        """
+        super(MakeUpDiscriminator, self).__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = []
+        model += [nn.Conv2d(input_nc, ndf, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                  norm_layer(ndf),
+                  nn.LeakyReLU(0.2, True)]
+
+        input_channel = ndf
+        for _ in range(n_layers):
+            output_channel = min(input_channel * 2, 512)
+            model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                      norm_layer(output_channel),
+                      nn.LeakyReLU(0.2, True)]
+            input_channel = output_channel
+
+        output_channel = min(input_channel*2, 512)
+        model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, padding=1, bias=use_bias),
+                  norm_layer(output_channel),
+                  nn.LeakyReLU(0.2, True),
+                  nn.Conv2d(output_channel, 1, kernel_size=4, padding=1)]
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, input):
+        """Standard forward."""
+
+        return self.model(input)
+
+
+class BaselineDiscriminator_(nn.Module):
+
+    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.InstanceNorm2d):
+        """Construct discriminator
+
+        Parameters:
+            input_nc (int)  -- the number of channels in input images
+            ndf (int)       -- the number of filters in the last conv layer
+            n_layers (int)  -- the number of conv layers in the discriminator
+            norm_layer      -- normalization layer
+        """
+        super(BaselineDiscriminator_, self).__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = []
+        model += [nn.Conv2d(input_nc, ndf, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                  norm_layer(ndf),
+                  nn.LeakyReLU(0.2, True)]
+
+        input_channel = ndf
+        for _ in range(n_layers):
+            output_channel = min(input_channel * 2, 512)
+            model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, stride=2, padding=1, bias=use_bias),
+                      norm_layer(output_channel),
+                      nn.LeakyReLU(0.2, True)]
+            input_channel = output_channel
+
+        output_channel = min(input_channel*2, 512)
+        model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, padding=1, bias=use_bias),
+                  norm_layer(output_channel),
+                  nn.LeakyReLU(0.2, True),
+                  nn.Conv2d(output_channel, 1, kernel_size=4, padding=1)]
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, input):
+        """Standard forward."""
+
+        return self.model(input)
 
 class BaselineDiscriminator(nn.Module):
 
@@ -499,13 +719,13 @@ class AttentionDiscriminator(nn.Module):
                   nn.LeakyReLU(0.2, True)]
 
         input_channel = ndf
+
         for _ in range(n_layers):
             output_channel = min(input_channel * 2, 512)
             model += [nn.Conv2d(input_channel, output_channel, kernel_size=4, stride=2, padding=1, bias=use_bias),
                       norm_layer(output_channel),
                       nn.LeakyReLU(0.2, True)]
             input_channel = output_channel
-
         output_channel = min(input_channel * 2, 512)
 
         model += [Self_Attn(input_channel, 'relu')]
